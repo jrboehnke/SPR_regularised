@@ -1,0 +1,401 @@
+# This file contains the syntax required to replicate the results in the related power point presentation.
+
+# The following packages need to be installed if they are not available already
+# and then they need to be loaded.
+library(MASS)
+library(glmnet)
+library(rms)
+
+
+### Chapter 1: Data set creation
+
+# This syntax is commented out at the moment as the two files presented at the workshop are uploaded here as well.
+
+# Teaching data set
+# N= 250
+# k = 15
+# all slightly intercorrelated, r = 0.20
+# corr.sigma <- matrix(data=0, nrow=15, ncol=15)
+# diag(nocorr.sigma) <- 1
+# corr.sigma
+# corr.sigma[-1 , -1] <- .2   #all cells to corr.x, inter-pred correlations
+# corr.sigma[1 , -1] <- c(0.50, 0.40, 0.30, rep(0.2, times=11))   # set pred-y correlations, three are target hypotheses at 0.50, 0.40 and 0.20
+# corr.sigma[-1 , 1] <- c(0.50, 0.40, 0.30, rep(0.2, times=11))   # set pred-y correlations, three are target hypotheses at 0.50, 0.40 and 0.20
+# diag(corr.sigma) <- 1
+# corr.sigma
+
+# Generation of one teaching data set and one for cross-validation of estimates
+# as of 07/2022 MASS::mvrnorm does not accept set.seed() consistently, therefore data sets physically saved and read-in in session
+# teach.dat <- data.frame(mvrnorm(n=250, mu=rep(0, times=ncol(corr.sigma)), Sigma= corr.sigma))
+# names(teach.dat) <- paste("var", seq_along(1:15), sep="")
+# round(cor(teach.dat), 2)
+#add a cross-validation data set of the same size
+# cross.dat <- data.frame(mvrnorm(n=250, mu=rep(0, times=ncol(corr.sigma)), Sigma= corr.sigma))
+# names(cross.dat) <- paste("var", seq_along(1:15), sep="")
+# round(cor(cross.dat), 2)
+
+# The data files need to be read into your environment and the following paths need to be adapted accordingly, e.g. via setting a directory and then reading the files
+# setwd("C:/Users/JRBoehnke/OneDrive - University of Dundee/Documents/Vorträge_mother/2022_07_SPR/Workshop_Lasso/Teaching_folder/")
+# teach.dat <- read.table("SPR_Teaching_data.txt")
+# cross.dat <- read.table("SPR_Teaching_CVdata.txt")
+
+
+
+### Chapter 2: Regression
+
+# OLS Regression model
+OLS.reg <- ols(var1 ~  . , data = teach.dat)
+summary.lm(OLS.reg)
+#calculate correlation and prediction error (mean squared error) in validation sample
+cor.OLS <- cor(cross.dat[,1], predictrms(OLS.reg, newdata=cross.dat[, 2:15], type="lp"))
+mse.OLS <- mean((cross.dat[,1] - predictrms(OLS.reg, newdata=cross.dat, type="lp"))^2)
+
+# Univariate screening
+p.table <- NULL
+for (i in 2:15) {
+univ.reg <- ols(var1 ~  . , data = teach.dat[ , c(1, i)])
+p.table <- rbind(p.table, c(names(teach.dat)[i], round(summary.lm(univ.reg)$coefficients[2, "Pr(>|t|)"], 3)))
+rm(univ.reg)
+} #end of loop
+p.table <- data.frame(p.table)
+names(p.table) <- c("variable", "p-value")
+p.table[ , 2] <- as.numeric(p.table[ , 2])
+p.table
+
+# Backward selection:
+backward.p <- fastbw(OLS.reg, rule="p", type="individual")
+backward.p
+
+
+
+### Chapter 3: Estimating regularised models (lasso, elastic net, ridge)
+
+# Lasso
+lasso.example <- glmnet(y=as.vector(teach.dat[ , 1]), x=as.matrix(teach.dat[ , 2:15]))
+
+# Discussion of several plots and the main output follows in the slides:
+plot(lasso.example, "norm")
+plot(lasso.example, "lambda")
+plot(lasso.example, "dev")
+lasso.example
+coef(lasso.example, s=exp(-1))
+coef(lasso.example, s=exp(-2))
+
+# How to find the optimal lambda value via cross-validation
+lasso.cv.example <- cv.glmnet(y=as.vector(teach.dat[ , 1]), x=as.matrix(teach.dat[ , 2:15]), nfold=10)
+lasso.cv.example
+plot(lasso.cv.example)
+log(lasso.cv.example$lambda.min)
+log(lasso.cv.example$lambda.1se)
+coef(lasso.cv.example, s = "lambda.1se")
+
+# determining correlation and deviance
+cor.lasso <- cor(cross.dat[,1], predict(lasso.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))
+mse.lasso <- mean((cross.dat[,1] - predict(lasso.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))^2)
+
+
+# Later used in the presentation:
+# bootstrap the number of times coefficients are included
+coeff.extract <- NULL
+for (stab.le in 1:500) {
+	row.sample <- sample(1:250, replace=T)
+	boot.sample <- teach.dat[ row.sample, ]
+	
+	lcv.res <- cv.glmnet(y=as.vector(boot.sample[ , 1]), x=as.matrix(boot.sample[ , 2:15]), nfold=10)
+coeff.extract <- cbind(coeff.extract, as.matrix(coef(lcv.res, s = "lambda.1se")))
+rm(row.sample, boot.sample, lcv.res)
+} # end of bootstrap
+
+summary(coeff.extract)
+# Average coefficients (treating not extracted as "0"
+rowMeans(coeff.extract)
+# Selection frequency
+rowSums(coeff.extract!=0)
+
+
+
+# Cross validation for elastic net penalty
+elastic.cv.example <- cv.glmnet(y=as.vector(teach.dat[ , 1]), x=as.matrix(teach.dat[ , 2:15]), nfold=10, alpha=0.5)
+coef(elastic.cv.example, s = "lambda.1se")
+# determining correlation and deviance
+cor.elastic <- cor(cross.dat[,1], predict(elastic.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))
+mse.elastic <- mean((cross.dat[,1] - predict(elastic.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))^2)
+
+
+
+# Cross validation for elastic net penalty
+ridge.cv.example <- cv.glmnet(y=as.vector(teach.dat[ , 1]), x=as.matrix(teach.dat[ , 2:15]), nfold=10, alpha=0)
+coef(ridge.cv.example, s = "lambda.1se")
+# determining correlation and deviance
+cor.ridge <- cor(cross.dat[,1], predict(ridge.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))
+mse.ridge <- mean((cross.dat[,1] - predict(ridge.cv.example, newx = as.matrix(cross.dat[, 2:15]), s = "lambda.1se"))^2)
+
+# comparing the observed-predicted correlations and prediction errors
+cor.OLS
+mse.OLS
+cor.lasso
+mse.lasso
+cor.elastic
+mse.elastic
+cor.ridge
+mse.ridge
+
+
+
+### Chapter 4: Definition of functions for simulations
+
+# automated loop to run and design for certain N and correlations
+# number of respondents, number of variables (first is treated as dependent), correlation vector to set y-x correlations, number of crossvalidation samples and the number of simulation samples
+
+reg.compare <- function(N.resp=1000, n.var, corr.y=0, corr.x=0, crossval=10, bootstraps=500) {
+# set up intercorrelation matrix based on nvar
+# first variable is set to be the response variable
+corr.sigma <- matrix(data=0, nrow=n.var, ncol=n.var)
+corr.sigma[-1 , -1] <- corr.x   #all cells to corr.x, inter-pred correlations
+corr.sigma[ 1, -1] <- corr.y   # set pred-y correlations
+corr.sigma[-1 , 1] <- corr.y   # set pred-y correlations
+diag(corr.sigma) <- 1
+
+
+# Capture objects
+correl.mat <- NULL
+OLS.p <- NULL
+OLS.ftest <- NULL
+Back.p <- NULL
+Lasso.selected <- NULL
+Elastic.selected <- NULL
+Ridge.selected <- NULL
+OLS.cor <- NULL
+OLS.mse <- NULL
+cor.lasso <- NULL
+mse.lasso <- NULL
+cor.elastic <- NULL
+mse.elastic <- NULL
+cor.ridge <- NULL
+mse.ridge <- NULL
+
+# bootstrap loop
+for (boot in 1:bootstraps) {
+data <- data.frame(mvrnorm(n=N.resp, mu=rep(0, times=n.var), Sigma= corr.sigma))
+names(data) <- paste("var", seq_along(1:n.var), sep="")
+
+cross.val.dat <- data.frame(mvrnorm(n=N.resp, mu=rep(0, times=n.var), Sigma= corr.sigma))
+names(cross.val.dat) <- paste("var", seq_along(1:n.var), sep="")
+
+correl.mat[[boot]] <- round(cor(data), 2)
+
+# Normal regression model
+simple.reg <- ols(var1 ~  . , data = data)
+pval <- summary.lm(simple.reg)$coefficients[, "Pr(>|t|)"]
+OLS.p <- cbind(OLS.p, pval)
+OLS.ftest <- rbind(OLS.ftest , summary.lm(simple.reg)$fstatistic)
+OLS.cor[[boot]] <- cor(cross.val.dat[,1], predictrms(simple.reg, newdata=cross.val.dat[, -1], type="lp"))
+OLS.mse[[boot]] <- mean((cross.val.dat[,1] - predictrms(simple.reg, newdata=cross.val.dat[, -1] , type="lp"))^2)
+
+# Backward selection
+# Error in slides: there the "aic" selection procedure was used, here now corrected
+backward.p <- fastbw(simple.reg, rule="p", type="individual")
+vars.kept <- as.numeric(substr(backward.p$names.kept,4,6))
+reg.vec <- rep(0, times=n.var)
+# Overwrite the positions in the vector that represent the variables (remember: "1" is the intercept)
+reg.vec[vars.kept] <- 1
+Back.p <- cbind(Back.p, reg.vec)
+
+test.cv1 <- cv.glmnet(x=as.matrix(data[ , -1]), y=as.vector(data[ , 1]), nfolds=crossval, alpha=1)
+selected.slot <- which(test.cv1$lambda == test.cv1$lambda.1se)
+lasso <-c(test.cv1$glmnet.fit$a0[selected.slot], test.cv1$glmnet.fit$beta[ , selected.slot])
+Lasso.selected <- cbind(Lasso.selected, lasso)
+cor.lasso[[boot]] <- cor(cross.val.dat[,1], predict(test.cv1, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))
+mse.lasso[[boot]] <- mean((cross.val.dat[,1] - predict(test.cv1, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))^2)
+
+test.cv2 <- cv.glmnet(x=as.matrix(data[ , -1]), y=as.vector(data[ , 1]), nfolds=10, alpha=0.5)
+selected.slot <- which(test.cv2$lambda == test.cv2$lambda.1se)
+elastic <- c(test.cv2$glmnet.fit$a0[selected.slot], test.cv2$glmnet.fit$beta[ , selected.slot])
+Elastic.selected <- cbind(Elastic.selected, elastic)
+cor.elastic[[boot]] <- cor(cross.val.dat[,1], predict(test.cv2, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))
+mse.elastic[[boot]] <- mean((cross.val.dat[,1] - predict(test.cv2, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))^2)
+
+test.cv3 <- cv.glmnet(x=as.matrix(data[ , -1]), y=as.vector(data[ , 1]), alpha=0, nfolds=crossval)
+selected.slot <- which(test.cv3$lambda == test.cv3$lambda.1se)
+ridge <-c(test.cv3$glmnet.fit$a0[selected.slot], test.cv3$glmnet.fit$beta[ , selected.slot])
+Ridge.selected <- cbind(Ridge.selected, ridge)
+cor.ridge[[boot]] <- cor(cross.val.dat[,1], predict(test.cv3, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))
+mse.ridge[[boot]] <- mean((cross.val.dat[,1] - predict(test.cv3, newx = as.matrix(cross.val.dat[, -1]), s = "lambda.1se"))^2)
+
+rm(test.cv1, test.cv2, test.cv3, simple.reg, backward.p, data, cross.val.dat)
+
+} #bootstrap end
+
+Result <- list(
+correl.mat,
+OLS.p, 
+OLS.ftest,
+Back.p, 
+Lasso.selected,
+Elastic.selected,
+Ridge.selected,
+OLS.cor,
+OLS.mse,
+cor.lasso,
+mse.lasso,
+cor.elastic,
+mse.elastic,
+cor.ridge,
+mse.ridge
+)
+
+names(Result) <- c("Correl.Mats", "pOLS", "OLS.ftest", "pBack", "Lasso", "Elastic", "Ridge", 
+"OLS.cor", "OLS.mse", "cor.lasso", "mse.lasso", "cor.elastic", "mse.elastic", "cor.ridge", "mse.ridge")
+
+return(Result)
+
+} #function end
+
+
+
+# AGGREGATOR function
+# Function to present the results, which uses an object resulting from reg.compare() as input
+regtable.perf <- function(res.compare) {
+get.Ftest <- data.frame(res.compare$OLS.ftest)
+get.Ftest$Ftest.p <- pf(get.Ftest$value, df1= get.Ftest$numdf, df2= get.Ftest$dendf, lower.tail=F)
+
+# all without intercepts
+res.table <- data.frame(cbind(
+rowSums(res.compare$pOLS[-1,]<.05),
+rowSums((res.compare$pOLS[-1,]<.05) & (get.Ftest$Ftest.p < 0.5)),
+rowSums(res.compare$pBack[-1,]!=0),
+rowSums(res.compare$Lasso[-1,]!=0),
+rowSums(res.compare$Elastic[-1,]!=0),
+rowSums(res.compare$Ridge[-1,]!=0)
+)) #End cbind & data.frame for Table
+names(res.table) <- c("OLSp", "OLSmodel", "OLSback", "Lasso", "Elastic", "Ridge")
+
+no.selected.features <- data.frame(cbind(
+colSums(res.compare$pOLS[-1,]<.05),
+colSums((res.compare$pOLS[-1,]<.05) & (get.Ftest$Ftest.p < 0.5)),
+colSums(res.compare$pBack[-1,]!=0, na.rm=T),
+colSums(res.compare$Lasso[-1,]!=0, na.rm=T),
+colSums(res.compare$Elastic[-1,]!=0, na.rm=T),
+colSums(res.compare$Ridge[-1,]!=0, na.rm=T)
+)) #End cbind & data.frame for Table
+names(no.selected.features) <- c("OLSp", "OLSmodel", "OLSback", "Lasso", "Elastic", "Ridge")
+
+resforreturn <-
+list(res.table, no.selected.features)
+names(resforreturn) <- c("res.table", "no.selected.features")
+
+return(
+resforreturn
+)
+print(res.table)
+} #End aggregator function
+
+
+
+# PLOT function for reg.table result
+# fucntion to produce the 2x3 panel plots with histograms that are presented in the slides
+# uses an object with the results of reg.compare() and a plot title as input
+plot.regperformance <- function(regresult, main.t="Plot Title") {
+par(mfrow=c(2,3), oma=c(0,0,3,0))
+for (col.i in 1:ncol(regresult$no.selected.features)) {
+hist(regresult$no.selected.features[ , col.i], main=names(regresult$no.selected.features[col.i]), 
+xlab="No. selected coefficients", cex.main=1.6, xlim=c(-1, max(regresult$no.selected.features)+1), ylim=c(0, nrow(regresult$no.selected.features)))
+} # loop end
+mtext(text=main.t,side=3,line=0,outer=TRUE, cex=2)
+} # function end
+
+
+
+# PATTERN checker for responses
+# makes only partly sense as the regularised models are not strictly for identifying true/ correct relationships
+# also makes likely only sense to use if some of the regression paths between X and y are actually simulated to be zero
+pattern.regperformance <- function(res.compare, pattern.vect) {
+get.Ftest <- data.frame(res.compare$OLS.ftest)
+get.Ftest$Ftest.p <- pf(get.Ftest$value, df1= get.Ftest$numdf, df2= get.Ftest$dendf, lower.tail=F)
+
+# all without intercepts
+
+pOLS <- NULL
+for (cols in 1:ncol(res.compare$pOLS)) {
+pOLS[cols] <- identical(as.numeric(res.compare$pOLS[-1,cols]<.05), pattern.vect)
+} #end loop1
+
+pBack <- NULL
+for (cols in 1:ncol(res.compare$pBack)) {
+pBack[cols] <- identical(as.numeric(res.compare$pBack[-1,cols]!=0), pattern.vect)
+} #end loop2
+
+lasso.c <- NULL
+for (cols in 1:ncol(res.compare$Lasso)) {
+lasso.c[cols] <- identical(as.numeric(res.compare$Lasso[-1,cols]!=0), pattern.vect)
+} #end loop3
+
+elastic.c <- NULL
+for (cols in 1:ncol(res.compare$Elastic)) {
+elastic.c[cols] <- identical(as.numeric(res.compare$Elastic[-1,cols]!=0), pattern.vect)
+} #end loop4
+
+ridge.c <- NULL
+for (cols in 1:ncol(res.compare$Ridge)) {
+ridge.c[cols] <- identical(as.numeric(res.compare$Ridge[-1,cols]!=0), pattern.vect)
+} #end loop4
+
+res.table <- data.frame(cbind(
+pOLS,
+pBack,
+lasso.c,
+elastic.c,
+ridge.c
+))
+names(res.table) <- c("OLSp", "OLSback", "Lasso", "Elastic", "Ridge")
+return(res.table)
+} #End pattern function
+
+
+
+### Chapter 5: Some selected simulation scenarios as presented in the slides
+
+# firstly the extension of the teaching example
+teach.run <- reg.compare(N.resp=250, n.var=15, corr.y= c(0.50, 0.40, 0.30, rep(0.2, times=11)), corr.x=0.20, bootstraps=500)
+teach.first <- regtable.perf(teach.run)
+plot.regperformance(teach.first, main.t="N=250, k=15, corr.y = c(0.5, 0.4, 0.3), inter-correlation r = 0.20")
+summary(pattern.regperformance(teach.run, c(rep(1, times=14)) ))
+par(mfrow=c(1,2))
+boxplot(unlist(teach.run$OLS.cor), unlist(teach.run$cor.lasso) , unlist(teach.run$cor.elastic) , unlist(teach.run$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(teach.run$OLS.mse), unlist(teach.run$mse.lasso) , unlist(teach.run$mse.elastic) , unlist(teach.run$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
+
+# extension of the teaching example without x-correlations, i.e. fully orthogonal predictors
+teach.run2 <- reg.compare(N.resp=250, n.var=15, corr.y= c(0.50, 0.40, 0.30, rep(0.2, times=11)), corr.x=0, bootstraps=500)
+teach.first2 <- regtable.perf(teach.run2)
+plot.regperformance(teach.first2, main.t="N=250, k=15, corr.y = c(0.5, 0.4, 0.3), inter-correlation r = 0.00")
+summary(pattern.regperformance(teach.run2, c(rep(1, times=14)) ))
+par(mfrow=c(1,2))
+boxplot(unlist(teach.run2$OLS.cor), unlist(teach.run2$cor.lasso) , unlist(teach.run2$cor.elastic) , unlist(teach.run2$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(teach.run2$OLS.mse), unlist(teach.run2$mse.lasso) , unlist(teach.run2$mse.elastic) , unlist(teach.run2$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
+
+# Large p / different N scenarios
+simul.50.49 <- reg.compare(N.resp=50, n.var=49, corr.y= c(0.50, 0.40, 0.30, rep(0, times=45)), corr.x=0.20, bootstraps=500)
+simul.50.49.perf <- regtable.perf(simul.50.49)
+plot.regperformance(simul.50.49.perf, main.t="N=50, k=49, corr.y = c(0.5, 0.4, 0.3), inter-correlation r = 0.20")
+summary(pattern.regperformance(simul.50.49, c(1, 1, 1, rep(0, times=45)) ))
+par(mfrow=c(1,2))
+boxplot(unlist(simul.50.49$OLS.cor), unlist(simul.50.49$cor.lasso) , unlist(simul.50.49$cor.elastic) , unlist(simul.50.49$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(simul.50.49$OLS.mse), unlist(simul.50.49$mse.lasso) , unlist(simul.50.49$mse.elastic) , unlist(simul.50.49$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
+# and without the most extreme outliers
+par(mfrow=c(1,2))
+boxplot(unlist(simul.50.49$OLS.cor[simul.50.49$OLS.mse < 1000]), unlist(simul.50.49$cor.lasso) , unlist(simul.50.49$cor.elastic) , unlist(simul.50.49$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(simul.50.49$OLS.mse[simul.50.49$OLS.mse < 1000]), unlist(simul.50.49$mse.lasso) , unlist(simul.50.49$mse.elastic) , unlist(simul.50.49$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
+
+
+# Large p / different N scenarios
+simul.250.249 <- reg.compare(N.resp=250, n.var=249, corr.y= c(0.50, 0.40, 0.30, rep(0, times=245)), corr.x=0.20, bootstraps=500)
+simul.250.249.perf <- regtable.perf(simul.250.249)
+plot.regperformance(simul.250.249.perf, main.t="N=250, k=249, corr.y = c(0.5, 0.4, 0.3), inter-correlation r = 0.20")
+summary(pattern.regperformance(simul.250.249, c(1, 1, 1, rep(0, times=245)) ))
+par(mfrow=c(1,2))
+boxplot(unlist(simul.250.249$OLS.cor), unlist(simul.250.249$cor.lasso) , unlist(simul.250.249$cor.elastic) , unlist(simul.250.249$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(simul.250.249$OLS.mse), unlist(simul.250.249$mse.lasso) , unlist(simul.250.249$mse.elastic) , unlist(simul.250.249$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
+# without extreme prediction error
+par(mfrow=c(1,2))
+boxplot(unlist(simul.250.249$OLS.cor[simul.250.249$OLS.mse<1000]), unlist(simul.250.249$cor.lasso) , unlist(simul.250.249$cor.elastic) , unlist(simul.250.249$cor.ridge), names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Correlation")
+boxplot(unlist(simul.250.249$OLS.mse[simul.250.249$OLS.mse<1000]), unlist(simul.250.249$mse.lasso) , unlist(simul.250.249$mse.elastic) , unlist(simul.250.249$mse.ridge) , names=c("OLS", "Lasso", "Elastic", "Ridge"), main="Mean squared error")
